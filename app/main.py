@@ -117,6 +117,7 @@ def _page(body):
   .badge.live {{ background: var(--badge-live); color: var(--badge-live-fg); }}
   .badge.idle {{ background: var(--track); color: var(--muted); }}
   .badge.running {{ background: var(--badge-dry); color: var(--badge-dry-fg); }}
+  .badge.pausing {{ background: var(--badge-live); color: var(--badge-live-fg); }}
   .badge.dot::before {{ content: "\\25CF"; margin-right: 0.35rem; font-size: 0.6rem; vertical-align: 1px; }}
   .progress-block {{ margin-bottom: 1.1rem; }}
   .progress-block:last-child {{ margin-bottom: 0; }}
@@ -218,7 +219,7 @@ def dashboard():
 <div class="card-title">Run {mode_badge}</div>
 <div class="row">
   <form method="post" action="/run"><button type="submit" class="primary">Run reconcile pass</button></form>
-  <form method="post" action="/pause"><button type="submit">Pause</button></form>
+  <form method="post" action="/pause"><button id="pause-btn" type="submit">Pause</button></form>
   <form method="post" action="/clear-checkpoint"
         onsubmit="return confirm('Clear checkpoint? The next run will do a full fresh scan instead of resuming.');">
     <button type="submit">Clear checkpoint</button>
@@ -292,23 +293,39 @@ async function refreshStatus() {{
   const badge = document.getElementById('status-badge');
   const body = document.getElementById('status-body');
 
+  const pauseBtn = document.getElementById('pause-btn');
   if (data.running) {{
-    badge.textContent = 'running';
-    badge.className = 'badge running dot';
+    if (data.pause_requested) {{
+      badge.textContent = 'pausing…';
+      badge.className = 'badge pausing dot';
+      pauseBtn.disabled = true;
+      pauseBtn.textContent = 'Pausing…';
+    }} else {{
+      badge.textContent = 'running';
+      badge.className = 'badge running dot';
+      pauseBtn.disabled = false;
+      pauseBtn.textContent = 'Pause';
+    }}
     body.innerHTML = renderProgress(data.progress);
   }} else if (data.error) {{
     badge.textContent = 'error';
     badge.className = 'badge live';
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = 'Pause';
     body.innerHTML = `<div class="error-text">${{data.error}}</div>`;
     lastSample = null;
   }} else if (data.summary) {{
     badge.textContent = 'idle';
     badge.className = 'badge idle';
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = 'Pause';
     body.innerHTML = `<div class="summary-text">${{data.summary}}</div>` + renderProgress(data.progress);
     lastSample = null;
   }} else {{
     badge.textContent = 'idle';
     badge.className = 'badge idle';
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = 'Pause';
     body.innerHTML = '<div class="empty-status">No run has been started yet.</div>';
     lastSample = null;
   }}

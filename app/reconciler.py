@@ -126,7 +126,10 @@ def _save_run_state(state):
 
 
 def get_run_status():
-    return _load_run_state()
+    state = _load_run_state()
+    if state.get("running"):
+        state["pause_requested"] = _pause_requested()
+    return state
 
 
 def _pause_requested():
