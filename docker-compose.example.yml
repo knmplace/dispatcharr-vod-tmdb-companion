@@ -1,0 +1,59 @@
+# Example compose service to add to your OWN existing Dispatcharr stack.
+# Copy the `vod-tmdb-companion` service block below into your Dispatcharr
+# docker-compose.yml (or docker stack, e.g. Portainer) and adjust the values
+# marked CHANGE ME. Do not deploy this file standalone -- it must join the
+# same Docker network as your Dispatcharr container to reach its Postgres.
+#
+# This container reaches Dispatcharr's Postgres over Docker's internal
+# network, not a published port -- Postgres/Redis should never be exposed
+# externally for this to work. Find your Dispatcharr network name with:
+#   docker inspect <dispatcharr_container> \
+#     --format '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}'
+#   docker network ls   # match the network ID above to a name
+#
+# POSTGRES_HOST must resolve, via that network's DNS, to wherever Dispatcharr's
+# Postgres actually runs:
+#   - All-in-one (AIO) Dispatcharr image (Postgres runs inside the same
+#     container as Dispatcharr itself): point POSTGRES_HOST at the
+#     Dispatcharr container's own name/alias on the shared network.
+#   - Split multi-container deployment with its own postgres service: point
+#     POSTGRES_HOST at that service's name instead.
+#
+# POSTGRES_USER/PASSWORD/DB should match whatever Dispatcharr's own
+# environment already sets (see your Dispatcharr container's env / your
+# Dispatcharr compose file) -- do not invent new credentials here.
+services:
+  vod-tmdb-companion:
+    build: https://github.com/knmplace/dispatcharr-vod-tmdb-companion.git
+    # Or, once published: image: ghcr.io/knmplace/dispatcharr-vod-tmdb-companion:latest
+    container_name: vod-tmdb-companion
+    restart: unless-stopped
+    networks:
+      - dispatcharr_default   # CHANGE ME: your Dispatcharr stack's network name
+    environment:
+      - TZ=${TZ:-UTC}
+      - TMDB_API_KEY=${TMDB_API_KEY}          # required, get one free at themoviedb.org
+      - DRY_RUN=${DRY_RUN:-true}              # keep true until you've reviewed a dry-run pass
+      - AUTO_ACCEPT_CONFIDENCE=${AUTO_ACCEPT_CONFIDENCE:-80}
+      - MAX_ROWS=${MAX_ROWS:-0}
+      - WORKER_THREADS=${WORKER_THREADS:-8}
+      - TEST_WRITE_LIMIT=${TEST_WRITE_LIMIT:-0}
+      # Same env var names Dispatcharr's own settings.py reads -- match
+      # them to your actual Dispatcharr deployment, do not guess:
+      - POSTGRES_HOST=${POSTGRES_HOST}        # CHANGE ME: e.g. your Dispatcharr container's name
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-dispatcharr}  # usually "dispatcharr", confirm in your Dispatcharr env
+      - POSTGRES_USER=${POSTGRES_USER}        # CHANGE ME: match your Dispatcharr env
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # CHANGE ME: match your Dispatcharr env
+      # Redis is not required by this tool. Dispatcharr's own app-ready
+      # hooks will attempt (and harmlessly fail/retry for ~30s at startup)
+      # a Redis connection at the default of localhost:6379 unless you set
+      # REDIS_HOST here to point at your real Redis.
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    ports:
+      - "${COMPANION_PORT:-8686}:8686"
+
+networks:
+  dispatcharr_default:      # CHANGE ME: must match the network block name above
+    external: true
