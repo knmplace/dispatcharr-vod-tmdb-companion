@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "dispatcharr_vod_tmdb_companion",
+  "project_id": "cb92d142-0ee7-46e7-bdf5-00004a06533f"
+}
