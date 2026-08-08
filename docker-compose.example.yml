@@ -57,9 +57,9 @@ services:
       # a Redis connection at the default of localhost:6379 unless you set
       # REDIS_HOST here to point at your real Redis.
     volumes:
-      - ${DATA_DIR}:/data   # CHANGE ME: e.g. /etc/docker/tmdbtool -- same layout convention as your other stacks
+      - ${DATA_DIR}:/data   # CHANGE ME: e.g. /etc/docker/tmdbtool -- same layout convention as your other stacks in the .ENV 
     ports:
-      - "${COMPANION_PORT:-8686}:8686"
+      - "${COMPANION_PORT:-8686}:8686" # CHANGE IF NEEDED IN ENV
 
 networks:
   dispatcharr_default:      # CHANGE ME: must match the network block name above
