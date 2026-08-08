@@ -25,7 +25,21 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
+import requests
+from requests.adapters import HTTPAdapter
+
 logger = logging.getLogger("vod_tmdb_reconciler")
+
+# Shared session so concurrent TMDB /search calls reuse pooled HTTPS
+# connections instead of each request paying its own TCP+TLS handshake --
+# without this, raising worker_threads barely moves throughput since the
+# handshake cost (not TMDB_SEARCH_DELAY_SECS or TMDB's rate limit) dominates
+# per-request latency. Pool sized well above any realistic worker_threads
+# setting so threads never block waiting on a pooled connection.
+_tmdb_session = requests.Session()
+_tmdb_session.mount(
+    "https://", HTTPAdapter(pool_connections=64, pool_maxsize=64)
+)
 
 AUTO_ACCEPT_DEFAULT = 80  # mirrors bridge plugin's TMDB_DETECTION_CONFIDENCE_THRESHOLD
 TMDB_SEARCH_DELAY_SECS = 0.25  # be polite to TMDB's rate limit, applied per-worker
@@ -231,12 +245,6 @@ def _clean_title_and_year(name, year):
 def _search_tmdb(kind, title, year, api_key):
     """Query TMDB /search/tv or /search/movie. Returns results sorted by
     confidence, descending. `kind` is 'series' or 'movie'."""
-    try:
-        import requests
-    except ImportError:
-        logger.warning("requests library not available for TMDB search")
-        return []
-
     if not api_key:
         return []
 
@@ -252,7 +260,7 @@ def _search_tmdb(kind, title, year, api_key):
         }
         params = {k: v for k, v in params.items() if v}
 
-        response = requests.get(url, params=params, timeout=5)
+        response = _tmdb_session.get(url, params=params, timeout=5)
         response.raise_for_status()
         data = response.json()
 
