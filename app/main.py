@@ -25,8 +25,11 @@ setup_django()
 
 from reconciler import (  # noqa: E402  (must import after django.setup())
     clear_checkpoint,
+    get_review_counts,
     get_run_status,
+    list_review_items,
     pause_reconcile_pass,
+    resolve_review_items,
     run_reconcile_pass,
 )
 from settings_store import load_settings, save_settings  # noqa: E402
@@ -41,7 +44,7 @@ app = FastAPI(title="VOD TMDB Reconciler Companion")
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
-def _page(body):
+def _page(body, nav_extra=""):
     return f"""<html>
 <head>
 <title>VOD TMDB Reconciler Companion</title>
@@ -132,6 +135,53 @@ def _page(body):
   .empty-status {{ color: var(--muted); font-size: 0.88rem; padding: 0.5rem 0; }}
   .summary-text {{ font-size: 0.86rem; line-height: 1.55; white-space: pre-wrap; }}
   .error-text {{ color: var(--err); font-size: 0.86rem; font-weight: 600; }}
+  .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.85rem; }}
+  .stat-card {{
+    border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1rem;
+    background: var(--bg);
+  }}
+  .stat-card .stat-num {{ font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }}
+  .stat-card .stat-label {{ font-size: 0.82rem; font-weight: 600; margin-top: 0.15rem; }}
+  .stat-card .stat-hint {{ font-size: 0.76rem; color: var(--muted); margin-top: 0.35rem; line-height: 1.4; }}
+  .stat-card.ok .stat-num {{ color: var(--ok); }}
+  .stat-card.warn .stat-num {{ color: var(--warn); }}
+  .stat-card.err .stat-num {{ color: var(--err); }}
+  .stat-card a.stat-action {{ display: inline-block; margin-top: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--accent); text-decoration: none; }}
+  .stat-card a.stat-action:hover {{ text-decoration: underline; }}
+  .nav-link {{ font-size: 0.85rem; font-weight: 600; color: var(--accent); text-decoration: none; }}
+  .nav-link:hover {{ text-decoration: underline; }}
+  .poster-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }}
+  .review-row {{
+    border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem;
+    background: var(--bg);
+  }}
+  .review-row-head {{ display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.7rem; }}
+  .review-row-head input[type=checkbox] {{ margin-top: 0.25rem; width: 16px; height: 16px; }}
+  .review-row-title {{ font-weight: 700; font-size: 0.92rem; }}
+  .review-row-sub {{ font-size: 0.78rem; color: var(--muted); }}
+  .candidates {{ display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }}
+  .candidate {{
+    width: 84px; cursor: pointer; border: 2px solid transparent; border-radius: 8px;
+    padding: 3px; text-align: center;
+  }}
+  .candidate.selected {{ border-color: var(--accent); }}
+  .candidate img {{
+    width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px;
+    background: var(--track); display: block;
+  }}
+  .candidate .cand-title {{ font-size: 0.68rem; margin-top: 0.25rem; line-height: 1.25; color: var(--fg); }}
+  .candidate .cand-conf {{ font-size: 0.68rem; color: var(--muted); }}
+  .manual-id-row {{ display: flex; gap: 0.4rem; align-items: center; }}
+  .manual-id-row input[type=text] {{ width: 110px; padding: 0.35rem 0.5rem; font-size: 0.8rem; }}
+  .review-toolbar {{
+    position: sticky; top: 0; z-index: 5; display: flex; gap: 0.6rem; align-items: center;
+    flex-wrap: wrap; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; box-shadow: var(--shadow);
+  }}
+  .review-toolbar input[type=text] {{ width: 130px; }}
+  .conflict-note {{ font-size: 0.8rem; color: var(--muted); }}
+  .kind-heading {{ font-size: 1rem; font-weight: 700; margin: 1.5rem 0 0.75rem; }}
+  .kind-heading:first-child {{ margin-top: 0; }}
 </style>
 </head>
 <body>
@@ -140,7 +190,10 @@ def _page(body):
     <img src="/static/logo.jpg" alt="VOD TMDB Reconciler logo">
     <h1>VOD TMDB Reconciler <span class="sub">Companion dashboard</span></h1>
   </div>
-  <button id="theme-toggle" type="button" onclick="toggleTheme()">Dark mode</button>
+  <div class="row" style="margin-top:0;">
+    {nav_extra}
+    <button id="theme-toggle" type="button" onclick="toggleTheme()">Dark mode</button>
+  </div>
 </div>
 {body}
 <script>
@@ -167,6 +220,54 @@ function updateToggleLabel() {{
 </html>"""
 
 
+def _fmt_num(n):
+    return f"{n:,}"
+
+
+def _stat_card(count, label, hint, tone, action_href=None, action_label=None):
+    action = (
+        f'<a class="stat-action" href="{action_href}">{action_label}</a>'
+        if action_href and count else ""
+    )
+    return f"""<div class="stat-card {tone}">
+      <div class="stat-num">{_fmt_num(count)}</div>
+      <div class="stat-label">{label}</div>
+      <div class="stat-hint">{hint}</div>
+      {action}
+    </div>"""
+
+
+def _build_stat_cards():
+    counts = get_review_counts()
+    series, movie = counts["series"], counts["movie"]
+    auto_total = 0  # auto-matched rows aren't tracked in review counts (already handled)
+    review_total = series["review"] + movie["review"]
+    conflict_total = series["conflicts"] + movie["conflicts"]
+    no_result_total = series["no_result"] + movie["no_result"]
+
+    cards = [
+        _stat_card(
+            review_total, "Needs your review",
+            "TMDB found a possible match, but the confidence score was too low to trust automatically. "
+            "Pick the right one (or type a TMDB ID) on the review page.",
+            "warn", "/review#review", "Review now →",
+        ),
+        _stat_card(
+            no_result_total, "No TMDB match found",
+            "TMDB had nothing matching this title/year at all -- usually a typo, wrong year, or an obscure/regional title. "
+            "You can search TMDB yourself and enter the correct ID.",
+            "warn", "/review#no_result", "Enter ID manually →",
+        ),
+        _stat_card(
+            conflict_total, "Duplicate-row conflicts",
+            "Your library has two separate entries for the same title (one provider supplied a TMDB ID, another didn't). "
+            "Fixing this needs a safe merge tool that isn't built yet -- tracked, not lost.",
+            "err",
+        ),
+    ]
+    return '<div class="stat-grid">' + "".join(cards) + "</div>"
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     settings = load_settings()
@@ -175,6 +276,8 @@ def dashboard():
         '<span class="badge dry">DRY RUN</span>' if settings["dry_run"]
         else '<span class="badge live">LIVE -- will write to your database</span>'
     )
+    stat_cards_html = _build_stat_cards()
+    nav_extra = '<a class="nav-link" href="/review">Manual review →</a>'
 
     body = f"""
 <div class="card">
@@ -233,6 +336,11 @@ def dashboard():
   <span id="status-badge" class="badge idle">idle</span>
 </div>
 <div id="status-body"><div class="empty-status">Loading...</div></div>
+</div>
+
+<div class="card">
+<div class="card-title">What this means</div>
+{stat_cards_html}
 </div>
 
 <script>
@@ -334,7 +442,7 @@ refreshStatus();
 setInterval(refreshStatus, 3000);
 </script>
 """
-    return _page(body)
+    return _page(body, nav_extra=nav_extra)
 
 
 @app.post("/settings")
@@ -382,3 +490,189 @@ def pause():
 def clear_checkpoint_endpoint():
     clear_checkpoint()
     return RedirectResponse("/", status_code=303)
+
+
+_TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w154"
+
+
+def _candidate_html(kind, row_id, candidates):
+    if not candidates:
+        return '<div class="conflict-note">TMDB had no results for this title -- no candidates to pick from. Enter a TMDB ID manually below if you know it.</div>'
+    tiles = []
+    for i, cand in enumerate(candidates):
+        poster = cand.get("poster_path")
+        img_src = f"{_TMDB_POSTER_BASE}{poster}" if poster else ""
+        img_tag = f'<img src="{img_src}" alt="">' if img_src else '<div class="candidate-noimg" style="width:100%;aspect-ratio:2/3;background:var(--track);border-radius:6px;"></div>'
+        tiles.append(f"""<div class="candidate" data-tmdb-id="{cand.get('tmdb_id')}"
+             onclick="selectCandidate(this, '{kind}', {row_id})">
+          {img_tag}
+          <div class="cand-title">{cand.get('name') or '?'} ({cand.get('year') or '?'})</div>
+          <div class="cand-conf">{cand.get('confidence', 0):.0f}% match</div>
+        </div>""")
+    return '<div class="candidates">' + "".join(tiles) + "</div>"
+
+
+def _review_row_html(kind, entry, bucket):
+    row_id = entry["id"]
+    name = entry.get("name") or "(untitled)"
+    year = entry.get("year") or "?"
+    candidates = entry.get("top_5") or []
+    row_key = f"{kind}:{row_id}"
+    checkbox = (
+        f'<input type="checkbox" class="row-check" data-kind="{kind}" data-id="{row_id}">'
+        if bucket != "conflicts" else ""
+    )
+    conflict_note = ""
+    if bucket == "conflicts":
+        conflict_note = (
+            f'<div class="conflict-note">This title already exists as row id={entry.get("conflicting_row_id")} '
+            f'in your library. Merging duplicate rows isn\'t supported yet (tracked separately) -- no action available here.</div>'
+        )
+    manual_row = "" if bucket == "conflicts" else f"""
+      <div class="manual-id-row">
+        <label style="margin:0;font-weight:400;color:var(--muted);">or TMDB ID:</label>
+        <input type="text" class="manual-id" data-kind="{kind}" data-id="{row_id}" placeholder="e.g. 603">
+      </div>"""
+
+    return f"""<div class="review-row" data-row-key="{row_key}">
+      <div class="review-row-head">
+        {checkbox}
+        <div>
+          <div class="review-row-title">{name}</div>
+          <div class="review-row-sub">({year}) &middot; {kind}</div>
+        </div>
+      </div>
+      {_candidate_html(kind, row_id, candidates) if bucket != "conflicts" else ""}
+      {conflict_note}
+      {manual_row}
+    </div>"""
+
+
+_BUCKET_LABELS = {
+    "review": ("Needs your review", "Low-confidence matches -- pick the right poster or enter a TMDB ID."),
+    "no_result": ("No TMDB match found", "TMDB had nothing matching this title/year. Enter the correct TMDB ID if you know it."),
+    "conflicts": ("Duplicate-row conflicts", "Already exist elsewhere in your library under a different row -- needs a merge tool (not built yet), no action here."),
+}
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review_page():
+    items = list_review_items()
+    settings = load_settings()
+
+    sections = []
+    for bucket in ("review", "no_result", "conflicts"):
+        label, hint = _BUCKET_LABELS[bucket]
+        rows_html = []
+        for kind in ("series", "movie"):
+            for entry in items[kind][bucket]:
+                rows_html.append(_review_row_html(kind, entry, bucket))
+        if not rows_html:
+            continue
+        sections.append(f"""<div id="{bucket}" class="card">
+          <div class="card-title">{label} <span class="badge idle">{len(rows_html)}</span></div>
+          <div class="hint" style="margin:-0.5rem 0 1rem;">{hint}</div>
+          <div class="poster-grid">{''.join(rows_html)}</div>
+        </div>""")
+
+    if not sections:
+        sections.append('<div class="card"><div class="empty-status">Nothing needs manual attention right now.</div></div>')
+
+    mode_note = (
+        "Selections will be written immediately (dry_run is OFF)."
+        if not settings["dry_run"]
+        else "dry_run is ON -- resolving here will simulate the write and mark the row done, but nothing is saved to your database yet. Turn off dry_run on the main dashboard first if you want this to actually stick."
+    )
+
+    body = f"""
+<div class="review-toolbar">
+  <span id="selected-count">0 selected</span>
+  <input type="text" id="bulk-tmdb-id" placeholder="TMDB ID to apply to selected">
+  <button class="primary" onclick="applyBulk()">Apply to selected</button>
+  <span class="hint" style="margin:0;">{mode_note}</span>
+</div>
+{''.join(sections)}
+<div id="resolve-result"></div>
+
+<script>
+function selectCandidate(el, kind, rowId) {{
+  const row = el.closest('.review-row');
+  row.querySelectorAll('.candidate').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  const manualInput = row.querySelector('.manual-id');
+  if (manualInput) manualInput.value = el.dataset.tmdbId;
+}}
+
+document.querySelectorAll('.row-check').forEach(cb => cb.addEventListener('change', updateSelectedCount));
+function updateSelectedCount() {{
+  const n = document.querySelectorAll('.row-check:checked').length;
+  document.getElementById('selected-count').textContent = n + ' selected';
+}}
+
+function collectSelections(bulkTmdbId) {{
+  const selections = [];
+  document.querySelectorAll('.review-row').forEach(row => {{
+    const cb = row.querySelector('.row-check');
+    const manualInput = row.querySelector('.manual-id');
+    if (!manualInput) return; // conflicts have no action
+    const [kind, id] = row.dataset.rowKey.split(':');
+    let tmdbId = null;
+    if (bulkTmdbId && cb && cb.checked) {{
+      tmdbId = bulkTmdbId;
+    }} else if (!bulkTmdbId && manualInput.value.trim()) {{
+      tmdbId = manualInput.value.trim();
+    }} else {{
+      const picked = row.querySelector('.candidate.selected');
+      if (!bulkTmdbId && picked) tmdbId = picked.dataset.tmdbId;
+    }}
+    if (tmdbId) selections.push({{kind, id: parseInt(id, 10), tmdb_id: tmdbId}});
+  }});
+  return selections;
+}}
+
+async function applyBulk() {{
+  const bulkId = document.getElementById('bulk-tmdb-id').value.trim();
+  if (!bulkId) {{ alert('Enter a TMDB ID to apply to the selected rows.'); return; }}
+  const selections = collectSelections(bulkId);
+  if (!selections.length) {{ alert('Check at least one row first.'); return; }}
+  await submitResolve(selections);
+}}
+
+document.querySelectorAll('.review-row .manual-id').forEach(input => {{
+  input.addEventListener('keydown', async (e) => {{
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const row = input.closest('.review-row');
+    const [kind, id] = row.dataset.rowKey.split(':');
+    if (!input.value.trim()) return;
+    await submitResolve([{{kind, id: parseInt(id, 10), tmdb_id: input.value.trim()}}]);
+  }});
+}});
+
+async function submitResolve(selections) {{
+  const res = await fetch('/review/resolve', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{selections}}),
+  }});
+  const data = await res.json();
+  const el = document.getElementById('resolve-result');
+  if (data.skipped && data.skipped.length) {{
+    el.innerHTML = `<div class="error-text">Wrote ${{data.written}}. Skipped ${{data.skipped.length}}: ` +
+      data.skipped.map(s => `${{s.kind}}:${{s.id}} (${{s.reason}})`).join('; ') + `</div>`;
+  }} else {{
+    el.innerHTML = `<div class="summary-text">Wrote ${{data.written}} row(s). Reloading…</div>`;
+  }}
+  setTimeout(() => location.reload(), 1200);
+}}
+</script>
+"""
+    return _page(body, nav_extra='<a class="nav-link" href="/">← Dashboard</a>')
+
+
+@app.post("/review/resolve")
+def review_resolve(payload: dict):
+    settings = load_settings()
+    selections = payload.get("selections", [])
+    written, skipped = resolve_review_items(selections, settings["dry_run"], logger)
+    return {"written": written, "skipped": skipped}

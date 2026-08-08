@@ -132,6 +132,21 @@ def get_run_status():
     return state
 
 
+def get_review_counts():
+    """Read-only. Cheap count-only summary of the checkpoint's actionable
+    buckets, for the dashboard's stat cards (see list_review_items() for the
+    full row-level version the /review page uses)."""
+    items = list_review_items()
+    counts = {}
+    for kind in ("series", "movie"):
+        counts[kind] = {
+            "review": len(items[kind]["review"]),
+            "conflicts": len(items[kind]["conflicts"]),
+            "no_result": len(items[kind]["no_result"]),
+        }
+    return counts
+
+
 def _pause_requested():
     return os.path.exists(_PAUSE_FLAG_PATH)
 
@@ -278,6 +293,7 @@ def _search_tmdb(kind, title, year, api_key):
                 "name": result_title,
                 "year": (result_date or "")[:4],
                 "confidence": confidence,
+                "poster_path": result.get("poster_path"),
             })
 
         scored.sort(key=lambda x: x["confidence"], reverse=True)
@@ -432,7 +448,7 @@ def detect_conflicts(auto_matches, kind):
       the two rows would hit the DB's unique constraint on tmdb_id -- see
       CLAUDE.md Rule #1. This is also the exact "provider A supplied a
       tmdb_id, provider B didn't" duplicate-row scenario this whole project
-      exists to eventually consolidate (bead dispatcharr-vod-plex-bridge-plugin-47l).
+      exists to eventually consolidate (bead dispatcharr-vod-tmdb-companion-07r).
       Routed to manual review, never auto-merged -- see CLAUDE.md Rule #2."""
     from apps.vod.models import Series, Movie
 
@@ -484,6 +500,139 @@ def detect_conflicts(auto_matches, kind):
             clean.append(entry)
 
     return clean, conflicts
+
+
+def list_review_items():
+    """Read-only. Rebuilds the same auto/review/conflict/no_result buckets
+    _do_run_reconcile_pass's summary uses, but returns the actual row-level
+    entries instead of just counts -- this is what the /review page renders.
+
+    'review' and 'no_result' rows are actionable here (a plain tmdb_id write,
+    same path as apply_backfill_and_merge). 'conflict' rows are shown for
+    visibility only -- resolving them means merging the losing row's
+    Episode/M3U relations into the surviving row before deleting it, which
+    isn't implemented yet (see apply_backfill_and_merge's TODO / bead
+    dispatcharr-vod-tmdb-companion-07r), so no write action is offered
+    for them here."""
+    checkpoint = _load_checkpoint()
+
+    series_auto_raw, series_review, series_no_result = [], [], []
+    movies_auto_raw, movies_review, movies_no_result = [], [], []
+    for key, record in checkpoint.items():
+        kind, row_id = key.split(":", 1)
+        outcome, entry = record["outcome"], record.get("entry")
+        if outcome == "resolved":
+            continue
+        if kind == "series":
+            if outcome == "auto":
+                series_auto_raw.append(entry)
+            elif outcome == "review":
+                series_review.append(entry)
+            elif outcome == "no_result":
+                series_no_result.append({"id": int(row_id)})
+        else:
+            if outcome == "auto":
+                movies_auto_raw.append(entry)
+            elif outcome == "review":
+                movies_review.append(entry)
+            elif outcome == "no_result":
+                movies_no_result.append({"id": int(row_id)})
+
+    _, series_conflicts = detect_conflicts(series_auto_raw, "series")
+    _, movies_conflicts = detect_conflicts(movies_auto_raw, "movie")
+
+    # no_result rows have no TMDB candidates to show -- look their name/year
+    # back up from the DB so the review page can at least display the title
+    # and offer a manual tmdb_id text entry.
+    def _hydrate_no_result(rows, kind):
+        if not rows:
+            return []
+        from apps.vod.models import Series, Movie
+        model = Series if kind == "series" else Movie
+        ids = [r["id"] for r in rows]
+        found = {row.id: row for row in model.objects.filter(id__in=ids).only("id", "name", "year")}
+        hydrated = []
+        for r in rows:
+            row = found.get(r["id"])
+            if row is None:
+                continue
+            hydrated.append({"id": row.id, "name": row.name, "year": row.year, "top_5": []})
+        return hydrated
+
+    return {
+        "series": {
+            "review": series_review,
+            "conflicts": series_conflicts,
+            "no_result": _hydrate_no_result(series_no_result, "series"),
+        },
+        "movie": {
+            "review": movies_review,
+            "conflicts": movies_conflicts,
+            "no_result": _hydrate_no_result(movies_no_result, "movie"),
+        },
+    }
+
+
+def resolve_review_items(selections, dry_run, log=None):
+    """Writes a user-chosen tmdb_id for one or more review/no_result rows and
+    marks them 'resolved' in the checkpoint so they drop off the review page.
+
+    selections: list of {"kind": "series"|"movie", "id": int, "tmdb_id": str}.
+    Re-checks for a live tmdb_id conflict at write time (same rule as
+    detect_conflicts -- the DB may have changed since the row was scanned)
+    rather than trusting the review page's stale snapshot; conflicting
+    selections are skipped and reported, not force-written.
+
+    Returns (written_count, skipped) where skipped is a list of
+    {"kind", "id", "reason"} for anything not written."""
+    from django.db import transaction
+    from apps.vod.models import Series, Movie
+
+    checkpoint = _load_checkpoint()
+    written = 0
+    skipped = []
+
+    for sel in selections:
+        kind = sel.get("kind")
+        row_id = sel.get("id")
+        tmdb_id = str(sel.get("tmdb_id") or "").strip()
+        if kind not in ("series", "movie") or not row_id or not tmdb_id:
+            skipped.append({"kind": kind, "id": row_id, "reason": "missing kind/id/tmdb_id"})
+            continue
+
+        model = Series if kind == "series" else Movie
+        owner = model.objects.filter(tmdb_id=tmdb_id).exclude(id=row_id).values_list("id", flat=True).first()
+        if owner is not None:
+            skipped.append({
+                "kind": kind, "id": row_id,
+                "reason": f"tmdb_id {tmdb_id} is already used by row id={owner} -- needs a merge, not a plain write",
+            })
+            continue
+
+        if dry_run:
+            written += 1
+            if log:
+                log.info(f"VOD TMDB Reconciler [{kind}, manual resolve, DRY RUN]: id={row_id} -> tmdb_id={tmdb_id}")
+        else:
+            try:
+                with transaction.atomic():
+                    updated = model.objects.filter(id=row_id).update(tmdb_id=tmdb_id)
+                if updated:
+                    written += 1
+                    if log:
+                        log.info(f"VOD TMDB Reconciler [{kind}, manual resolve, WRITTEN]: id={row_id} -> tmdb_id={tmdb_id}")
+                else:
+                    skipped.append({"kind": kind, "id": row_id, "reason": "row no longer exists"})
+            except Exception as e:
+                skipped.append({"kind": kind, "id": row_id, "reason": str(e)})
+                if log:
+                    log.error(f"VOD TMDB Reconciler [{kind}, manual resolve, WRITE FAILED]: id={row_id} -> tmdb_id={tmdb_id}: {e}")
+
+        key = f"{kind}:{row_id}"
+        checkpoint[key] = {"outcome": "resolved", "entry": {"id": row_id, "resolved_tmdb_id": tmdb_id, "dry_run": dry_run}}
+
+    _save_checkpoint(checkpoint)
+    return written, skipped
 
 
 def apply_backfill_and_merge(clean_matches, kind, limit=None, log=None):
@@ -782,7 +931,7 @@ def _do_run_reconcile_pass(settings, log):
     state.update(running=False, summary=summary, error=None, paused=paused)
     _save_run_state(state)
 
-    # TODO(bead dispatcharr-vod-plex-bridge-plugin-47l), next milestone:
+    # TODO(bead dispatcharr-vod-tmdb-companion-07r), next milestone:
     #   - Merge path for the conflict bucket (series_conflicts/movies_conflicts
     #     above): reassign M3USeriesRelation/M3UMovieRelation (and, for series,
     #     Episode rows too -- Episode.series is CASCADE, so the losing series'
