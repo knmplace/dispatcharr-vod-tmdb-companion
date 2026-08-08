@@ -22,6 +22,7 @@ _lock = threading.Lock()
 _DEFAULTS = {
     "tmdb_api_key": "",
     "dry_run": True,
+    "scope": "both",
     "auto_accept_confidence": 80,
     "max_rows": 0,
     "worker_threads": 8,

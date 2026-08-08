@@ -583,10 +583,13 @@ def _do_run_reconcile_pass(settings, log):
     max_rows = int(max_rows) if max_rows not in (None, "", 0, "0") else None
     worker_threads = settings.get("worker_threads")
     worker_threads = int(worker_threads) if worker_threads not in (None, "", 0, "0") else DEFAULT_WORKER_THREADS
+    scope = settings.get("scope") or "both"
+    include_series = scope in ("both", "series")
+    include_movies = scope in ("both", "movies")
 
     log.info(
         f"VOD TMDB Reconciler: reconcile pass starting (dry_run={dry_run}, "
-        f"max_rows={max_rows or 'unlimited'}, worker_threads={worker_threads})"
+        f"scope={scope}, max_rows={max_rows or 'unlimited'}, worker_threads={worker_threads})"
     )
 
     if not api_key:
@@ -613,8 +616,14 @@ def _do_run_reconcile_pass(settings, log):
     def _already_done(kind, row_id):
         return f"{kind}:{row_id}" in checkpoint
 
-    series_todo = [r for r in series_missing if not _already_done("series", r["id"])]
-    movies_todo = [r for r in movies_missing if not _already_done("movie", r["id"])]
+    series_todo = (
+        [r for r in series_missing if not _already_done("series", r["id"])]
+        if include_series else []
+    )
+    movies_todo = (
+        [r for r in movies_missing if not _already_done("movie", r["id"])]
+        if include_movies else []
+    )
 
     if max_rows:
         series_todo = series_todo[:max_rows]
@@ -715,6 +724,7 @@ def _do_run_reconcile_pass(settings, log):
         f"{total_movies_missing} movies -- test mode)"
         if max_rows else ""
     )
+    scope_note += "" if scope == "both" else f" (scope: {scope} only)"
     status_note = " -- PAUSED, resume by clicking Run Reconcile again" if paused else ""
     scanned_series = len(series_auto_raw) + len(series_review) + series_no_result
     scanned_movies = len(movies_auto_raw) + len(movies_review) + movies_no_result

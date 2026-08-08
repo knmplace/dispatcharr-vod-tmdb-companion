@@ -189,6 +189,14 @@ def dashboard():
     <option value="false" {"selected" if not settings["dry_run"] else ""}>Live (writes resolved tmdb_id to the database)</option>
   </select>
 
+  <label for="scope">Scope</label>
+  <select id="scope" name="scope">
+    <option value="both" {"selected" if settings.get("scope", "both") == "both" else ""}>Series + Movies</option>
+    <option value="series" {"selected" if settings.get("scope", "both") == "series" else ""}>Series only</option>
+    <option value="movies" {"selected" if settings.get("scope", "both") == "movies" else ""}>Movies only</option>
+  </select>
+  <div class="hint">Limits a run to just one kind -- useful for re-scanning movies without re-touching series that already finished, or vice versa.</div>
+
   <label for="auto_accept_confidence">Auto-accept confidence threshold (0-100)</label>
   <input type="number" id="auto_accept_confidence" name="auto_accept_confidence" value="{settings['auto_accept_confidence']}" min="0" max="100">
 
@@ -316,6 +324,7 @@ setInterval(refreshStatus, 3000);
 def update_settings(
     tmdb_api_key: str = Form(""),
     dry_run: str = Form("true"),
+    scope: str = Form("both"),
     auto_accept_confidence: int = Form(80),
     worker_threads: int = Form(8),
     max_rows: int = Form(0),
@@ -325,6 +334,7 @@ def update_settings(
         {
             "tmdb_api_key": tmdb_api_key,
             "dry_run": dry_run.lower() == "true",
+            "scope": scope if scope in ("both", "series", "movies") else "both",
             "auto_accept_confidence": auto_accept_confidence,
             "worker_threads": worker_threads,
             "max_rows": max_rows,
