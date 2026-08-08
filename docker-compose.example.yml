@@ -24,8 +24,8 @@
 # Dispatcharr compose file) -- do not invent new credentials here.
 services:
   vod-tmdb-companion:
-    build: https://github.com/knmplace/dispatcharr-vod-tmdb-companion.git
-    # Or, once published: image: ghcr.io/knmplace/dispatcharr-vod-tmdb-companion:latest
+    image: ghcr.io/knmplace/dispatcharr-vod-tmdb-companion:latest
+    # Or build from source: build: https://github.com/knmplace/dispatcharr-vod-tmdb-companion.git
     container_name: vod-tmdb-companion
     restart: unless-stopped
     networks:
