@@ -17,6 +17,7 @@ import os
 
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from django_bootstrap import setup_django
 
@@ -37,6 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger("vod_tmdb_companion")
 
 app = FastAPI(title="VOD TMDB Reconciler Companion")
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
 def _page(body):
@@ -44,6 +46,7 @@ def _page(body):
 <head>
 <title>VOD TMDB Reconciler Companion</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/jpeg" href="/static/logo.jpg">
 <style>
   :root {{
     --bg: #f4f5f7; --card-bg: #fff; --fg: #1a1d23; --muted: #6b7280;
@@ -81,6 +84,8 @@ def _page(body):
     color: var(--fg); background: var(--bg);
   }}
   .topbar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.75rem; }}
+  .brand {{ display: flex; align-items: center; gap: 0.75rem; }}
+  .brand img {{ width: 40px; height: 40px; border-radius: 10px; box-shadow: var(--shadow); }}
   h1 {{ font-size: 1.3rem; font-weight: 700; margin: 0; letter-spacing: -0.01em; }}
   h1 span.sub {{ display: block; font-size: 0.8rem; font-weight: 400; color: var(--muted); margin-top: 0.15rem; }}
   .card {{
@@ -130,7 +135,10 @@ def _page(body):
 </head>
 <body>
 <div class="topbar">
-  <h1>VOD TMDB Reconciler <span class="sub">Companion dashboard</span></h1>
+  <div class="brand">
+    <img src="/static/logo.jpg" alt="VOD TMDB Reconciler logo">
+    <h1>VOD TMDB Reconciler <span class="sub">Companion dashboard</span></h1>
+  </div>
   <button id="theme-toggle" type="button" onclick="toggleTheme()">Dark mode</button>
 </div>
 {body}
