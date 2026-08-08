@@ -37,12 +37,12 @@ services:
       - ${DISPATCHARR_ENV_FILE}   # CHANGE ME: path to your Dispatcharr stack's .env (supplies POSTGRES_*)
     environment:
       - TZ=${TZ:-UTC}
-      - TMDB_API_KEY=${TMDB_API_KEY}          # required, get one free at themoviedb.org
-      - DRY_RUN=${DRY_RUN:-true}              # keep true until you've reviewed a dry-run pass
-      - AUTO_ACCEPT_CONFIDENCE=${AUTO_ACCEPT_CONFIDENCE:-80}
-      - MAX_ROWS=${MAX_ROWS:-0}
-      - WORKER_THREADS=${WORKER_THREADS:-8}
-      - TEST_WRITE_LIMIT=${TEST_WRITE_LIMIT:-0}
+      # TMDB_API_KEY, DRY_RUN, AUTO_ACCEPT_CONFIDENCE, MAX_ROWS,
+      # WORKER_THREADS, TEST_WRITE_LIMIT are no longer set here -- they're
+      # configured from the dashboard (Settings section at http://<host>:
+      # ${COMPANION_PORT:-8686}/) after first boot and persisted to
+      # ${DATA_DIR}/settings.json, so changing them doesn't require editing
+      # this file or recreating the container.
       # POSTGRES_HOST/PORT/DB/USER/PASSWORD come from env_file above, not
       # from this block. Only override here if your Dispatcharr .env uses
       # different variable names than dispatcharr.settings expects, or if
