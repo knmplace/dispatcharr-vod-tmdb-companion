@@ -1,5 +1,7 @@
 # Dispatcharr VOD TMDB Companion
 
+> **BETA** — early, unproven against a real Dispatcharr database. Expect rough edges; back up your DB before running with `DRY_RUN=false`.
+
 A standalone Docker companion service for [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr)
 that fuzzy-resolves missing TMDB ids for VOD Series and Movies, and
 (eventually) consolidates duplicate rows created when IPTV providers
