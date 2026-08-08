@@ -11,20 +11,23 @@
 #     --format '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}'
 #   docker network ls   # match the network ID above to a name
 #
-# POSTGRES_HOST must resolve, via that network's DNS, to wherever Dispatcharr's
-# Postgres actually runs:
-#   - All-in-one (AIO) Dispatcharr image (Postgres runs inside the same
-#     container as Dispatcharr itself): point POSTGRES_HOST at the
-#     Dispatcharr container's own name/alias on the shared network.
-#   - Split multi-container deployment with its own postgres service: point
-#     POSTGRES_HOST at that service's name instead.
+# --- Postgres credentials: which case are you? ---
 #
-# You should NOT need to type Postgres credentials by hand: `env_file`
-# below points this service at the SAME .env file your Dispatcharr stack
-# already uses, so POSTGRES_HOST/PORT/DB/USER/PASSWORD are picked up
-# automatically from values that already exist -- nothing is duplicated or
-# re-entered. Point env_file at wherever that file actually lives relative
-# to this compose file (same directory as your Dispatcharr docker-compose.yml).
+# All-in-one (AIO) Dispatcharr image (Postgres runs inside the SAME
+# container as Dispatcharr): the AIO image does not expose POSTGRES_* as
+# container env vars and has no .env file to inherit from -- Dispatcharr's
+# own settings.py falls back to fixed internal defaults (NAME=dispatcharr,
+# USER=dispatch). This is the common case. Set POSTGRES_* directly in the
+# `environment:` block below (via your OWN .env, not Dispatcharr's -- see
+# .env.example) and point POSTGRES_HOST at the Dispatcharr CONTAINER'S NAME
+# (not "localhost" -- that only resolves inside Dispatcharr's own container).
+#
+# Split multi-container deployment with its own postgres service AND a real
+# .env file Dispatcharr reads: uncomment the `env_file:` line instead and
+# point it at that file, then you can remove the individual POSTGRES_*
+# lines below since env_file supplies them. Confirm the actual values
+# first (e.g. `docker exec <dispatcharr_container> env | grep -i postgres`)
+# -- don't assume a .env exists just because this is the split-container case.
 services:
   vod-tmdb-companion:
     image: ghcr.io/knmplace/dispatcharr-vod-tmdb-companion:latest
@@ -33,31 +36,32 @@ services:
     restart: unless-stopped
     networks:
       - dispatcharr_default   # CHANGE ME: your Dispatcharr stack's network name
-    env_file:
-      - ${DISPATCHARR_ENV_FILE}   # CHANGE ME: path to your Dispatcharr stack's .env (supplies POSTGRES_*)
+    # env_file:
+    #   - ${DISPATCHARR_ENV_FILE}   # only if your Dispatcharr deployment actually has its own .env -- see note above
     environment:
       - TZ=${TZ:-UTC}
       # TMDB_API_KEY, DRY_RUN, AUTO_ACCEPT_CONFIDENCE, MAX_ROWS,
-      # WORKER_THREADS, TEST_WRITE_LIMIT are no longer set here -- they're
+      # WORKER_THREADS, TEST_WRITE_LIMIT are NOT set here -- they're
       # configured from the dashboard (Settings section at http://<host>:
       # ${COMPANION_PORT:-8686}/) after first boot and persisted to
       # ${DATA_DIR}/settings.json, so changing them doesn't require editing
       # this file or recreating the container.
-      # POSTGRES_HOST/PORT/DB/USER/PASSWORD come from env_file above, not
-      # from this block. Only override here if your Dispatcharr .env uses
-      # different variable names than dispatcharr.settings expects, or if
-      # POSTGRES_HOST needs to differ from what Dispatcharr itself uses
-      # (e.g. Dispatcharr connects via "localhost" because Postgres runs in
-      # its own container, but this companion needs the container's name
-      # instead since it's a separate container on the shared network):
-      # - POSTGRES_HOST=dispatcharr   # uncomment + set only if needed
+      #
+      # Postgres -- values below come from YOUR OWN .env (see .env.example),
+      # not from Dispatcharr's. CHANGE ME if your setup differs from the AIO
+      # defaults shown:
+      - POSTGRES_HOST=${POSTGRES_HOST}            # CHANGE ME: your Dispatcharr container's NAME (e.g. dispatcharr), not "localhost"
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-dispatcharr}
+      - POSTGRES_USER=${POSTGRES_USER:-dispatch}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}    # CHANGE ME: AIO default is "secret" -- confirm yours, don't assume
       #
       # Redis is not required by this tool. Dispatcharr's own app-ready
       # hooks will attempt (and harmlessly fail/retry for ~30s at startup)
       # a Redis connection at the default of localhost:6379 unless you set
       # REDIS_HOST here to point at your real Redis.
     volumes:
-      - ${DATA_DIR}:/data   # CHANGE ME: e.g. /etc/docker/tmdbtool -- same layout convention as your other stacks in the .ENV 
+      - ${DATA_DIR}:/data   # CHANGE ME: e.g. /etc/docker/tmdbtool -- same layout convention as your other stacks in the .ENV
     ports:
       - "${COMPANION_PORT:-8686}:8686" # CHANGE IF NEEDED IN ENV
 
