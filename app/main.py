@@ -511,7 +511,8 @@ def _candidate_html(kind, row_id, candidates):
                 'justify-content:center;font-size:0.6rem;color:var(--muted);text-align:center;'
                 'padding:0.25rem;">no poster (scanned before poster support -- rerun to refresh)</div>'
             )
-        tiles.append(f"""<div class="candidate" data-tmdb-id="{cand.get('tmdb_id')}"
+        selected_cls = " selected" if len(candidates) == 1 else ""
+        tiles.append(f"""<div class="candidate{selected_cls}" data-tmdb-id="{cand.get('tmdb_id')}"
              onclick="selectCandidate(this, '{kind}', {row_id})">
           {img_tag}
           <div class="cand-title">{cand.get('name') or '?'} ({cand.get('year') or '?'})</div>
@@ -536,13 +537,15 @@ def _review_row_html(kind, entry, bucket):
             f'<div class="conflict-note">This title already exists as row id={entry.get("conflicting_row_id")} '
             f'in your library. Merging duplicate rows isn\'t supported yet (tracked separately) -- no action available here.</div>'
         )
+    single_match = bucket != "conflicts" and len(candidates) == 1
+    prefill_id = candidates[0].get("tmdb_id") if single_match else ""
     manual_row = "" if bucket == "conflicts" else f"""
       <div class="manual-id-row">
         <label style="margin:0;font-weight:400;color:var(--muted);">or TMDB ID:</label>
-        <input type="text" class="manual-id" data-kind="{kind}" data-id="{row_id}" placeholder="e.g. 603">
+        <input type="text" class="manual-id" data-kind="{kind}" data-id="{row_id}" placeholder="e.g. 603" value="{prefill_id}">
       </div>"""
 
-    return f"""<div class="review-row" data-row-key="{row_key}">
+    return f"""<div class="review-row" data-row-key="{row_key}" data-single-match="{'1' if single_match else '0'}">
       <div class="review-row-head">
         {checkbox}
         <div>
@@ -595,6 +598,7 @@ def review_page():
     body = f"""
 <div class="review-toolbar">
   <span id="selected-count">0 selected</span>
+  <button onclick="selectAllSingleMatches()">Select all single matches</button>
   <button class="primary" onclick="applyPicked()">Apply chosen TMDB IDs</button>
   <span class="hint" style="margin:0;">Uses whatever TMDB ID you already picked or typed on each checked row.</span>
   <span style="width:1px;align-self:stretch;background:var(--border,#333);"></span>
@@ -618,6 +622,14 @@ document.querySelectorAll('.row-check').forEach(cb => cb.addEventListener('chang
 function updateSelectedCount() {{
   const n = document.querySelectorAll('.row-check:checked').length;
   document.getElementById('selected-count').textContent = n + ' selected';
+}}
+
+function selectAllSingleMatches() {{
+  document.querySelectorAll('.review-row[data-single-match="1"]').forEach(row => {{
+    const cb = row.querySelector('.row-check');
+    if (cb) cb.checked = true;
+  }});
+  updateSelectedCount();
 }}
 
 function collectSelections(bulkTmdbId) {{
