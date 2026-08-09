@@ -619,6 +619,7 @@ def review_page():
 <div class="review-toolbar">
   <span id="selected-count">0 selected</span>
   <button onclick="selectAllSingleMatches()">Select all single matches</button>
+  <button onclick="unselectAll()">Unselect all</button>
   <button class="primary" onclick="applyPicked()">Apply chosen TMDB IDs</button>
   <span class="hint" style="margin:0;">Uses whatever TMDB ID you already picked or typed on each checked row.</span>
   <span style="width:1px;align-self:stretch;background:var(--border,#333);"></span>
@@ -649,6 +650,11 @@ function selectAllSingleMatches() {{
     const cb = row.querySelector('.row-check');
     if (cb) cb.checked = true;
   }});
+  updateSelectedCount();
+}}
+
+function unselectAll() {{
+  document.querySelectorAll('.row-check:checked').forEach(cb => cb.checked = false);
   updateSelectedCount();
 }}
 
