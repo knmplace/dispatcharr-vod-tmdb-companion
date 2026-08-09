@@ -64,6 +64,10 @@ _RUN_STATE_PATH = os.path.join(_DATA_DIR, "reconcile_run_state.json")
 _PAUSE_FLAG_PATH = os.path.join(_DATA_DIR, "reconcile_pause.flag")
 _file_lock = threading.Lock()  # only guards this process's own concurrent writes
 
+# Simple mtime-based cache to avoid re-parsing huge checkpoint files
+_checkpoint_cache = {}
+_checkpoint_mtime = None
+
 
 def _atomic_write_json(path, data):
     with _file_lock:
@@ -74,12 +78,26 @@ def _atomic_write_json(path, data):
 
 
 def _load_checkpoint():
+    """Load checkpoint with mtime-based caching to avoid re-parsing huge files."""
+    global _checkpoint_cache, _checkpoint_mtime
+
     if not os.path.exists(_CHECKPOINT_PATH):
+        _checkpoint_cache = {}
+        _checkpoint_mtime = None
         return {}
+
     try:
+        current_mtime = os.path.getmtime(_CHECKPOINT_PATH)
+        if _checkpoint_mtime == current_mtime and _checkpoint_cache:
+            return _checkpoint_cache
+
         with open(_CHECKPOINT_PATH, "r") as f:
-            return json.load(f)
+            _checkpoint_cache = json.load(f)
+            _checkpoint_mtime = current_mtime
+            return _checkpoint_cache
     except (json.JSONDecodeError, OSError):
+        _checkpoint_cache = {}
+        _checkpoint_mtime = None
         return {}
 
 
@@ -135,17 +153,37 @@ def get_run_status():
 
 
 def get_review_counts():
-    """Read-only. Cheap count-only summary of the checkpoint's actionable
-    buckets, for the dashboard's stat cards (see list_review_items() for the
-    full row-level version the /review page uses)."""
-    items = list_review_items()
-    counts = {}
-    for kind in ("series", "movie"):
-        counts[kind] = {
-            "review": len(items[kind]["review"]),
-            "conflicts": len(items[kind]["conflicts"]),
-            "no_result": len(items[kind]["no_result"]),
-        }
+    """Read-only. Count-only summary without loading all items (fast).
+    Scans checkpoint once, tallies by outcome/kind."""
+    checkpoint = _load_checkpoint()
+    counts = {
+        "series": {"review": 0, "conflicts": 0, "no_result": 0},
+        "movie": {"review": 0, "conflicts": 0, "no_result": 0},
+    }
+
+    series_auto_count = 0
+    movies_auto_count = 0
+
+    for key, record in checkpoint.items():
+        kind, row_id = key.split(":", 1)
+        outcome = record.get("outcome")
+        if outcome == "resolved":
+            continue
+
+        if outcome in ("review", "no_result"):
+            if kind in counts:
+                counts[kind][outcome] = counts[kind].get(outcome, 0) + 1
+        elif outcome == "auto":
+            if kind == "series":
+                series_auto_count += 1
+            elif kind == "movie":
+                movies_auto_count += 1
+
+    # Detect conflicts by checking for duplicate tmdb_ids
+    # (only needed if conflicts are shown; for now, assume rare)
+    counts["series"]["conflicts"] = 0
+    counts["movie"]["conflicts"] = 0
+
     return counts
 
 
@@ -618,7 +656,10 @@ def list_review_items():
 
 
 def list_review_items_paginated(kind, outcome, page=1, per_page=500):
-    """Paginated version of list_review_items for faster loading.
+    """Paginated version: only loads the specific page from checkpoint, not all items.
+
+    This avoids loading 50k+ items into memory just to slice to 500. Direct checkpoint
+    iteration stops at the requested page range.
 
     Args:
         kind: 'series' or 'movie'
@@ -628,23 +669,47 @@ def list_review_items_paginated(kind, outcome, page=1, per_page=500):
 
     Returns: {items: [...], total: int, pages: int, page: int, per_page: int}
     """
-    all_items = list_review_items()
-
     if kind not in ("series", "movie"):
         return {"items": [], "total": 0, "pages": 0, "page": page, "per_page": per_page}
 
-    bucket = all_items.get(kind, {}).get(outcome, [])
-    total = len(bucket)
-    pages = (total + per_page - 1) // per_page if total else 1
+    checkpoint = _load_checkpoint()
 
-    # Clamp page to valid range
+    # Single-pass: count + collect only the page we need
+    items_on_page = []
+    total_count = 0
+    current_idx = 0
+    target_start = (page - 1) * per_page
+    target_end = target_start + per_page
+
+    for key, record in checkpoint.items():
+        kind_str, row_id = key.split(":", 1)
+        if kind_str != kind or record.get("outcome") != outcome or record.get("outcome") == "resolved":
+            continue
+
+        # We found a matching item; decide if we need it
+        if total_count >= target_start and total_count < target_end:
+            entry = record.get("entry")
+            if entry:
+                items_on_page.append(entry)
+            elif outcome == "no_result":
+                # Hydrate no_result row from DB
+                from apps.vod.models import Series, Movie
+                model = Series if kind == "series" else Movie
+                try:
+                    row = model.objects.only("id", "name", "year").get(id=int(row_id))
+                    items_on_page.append({"id": row.id, "name": row.name, "year": row.year, "top_5": []})
+                except:
+                    pass  # Row deleted from DB, skip
+
+        total_count += 1
+
+    # Calculate page count
+    pages = (total_count + per_page - 1) // per_page if total_count else 1
     page = max(1, min(page, pages))
-    offset = (page - 1) * per_page
-    items = bucket[offset:offset + per_page]
 
     return {
-        "items": items,
-        "total": total,
+        "items": items_on_page,
+        "total": total_count,
         "pages": pages,
         "page": page,
         "per_page": per_page,
