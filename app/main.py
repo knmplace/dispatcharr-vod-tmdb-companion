@@ -154,7 +154,7 @@ def _page(body, nav_extra=""):
   .stat-card.err .stat-num {{ color: var(--err); }}
   .stat-card a.stat-action {{ display: inline-block; margin-top: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--accent); text-decoration: none; }}
   .stat-card a.stat-action:hover {{ text-decoration: underline; }}
-  .nav-link {{ font-size: 0.85rem; font-weight: 600; color: var(--accent); text-decoration: none; }}
+  .nav-link {{ font-size: 0.85rem; font-weight: 600; color: var(--accent); text-decoration: none; -webkit-user-drag: none; user-select: none; }}
   .nav-link:hover {{ text-decoration: underline; }}
   .poster-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }}
   .review-row {{
@@ -292,7 +292,7 @@ def dashboard():
         else '<span class="badge live">LIVE -- will write to your database</span>'
     )
     stat_cards_html = _build_stat_cards()
-    nav_extra = '<a class="nav-link" href="/review">Manual review →</a>'
+    nav_extra = '<span class="nav-link" style="cursor:pointer;" onclick="window.location.href=\'/review\'">Manual review →</span>'
 
     body = f"""
 <div class="card">
