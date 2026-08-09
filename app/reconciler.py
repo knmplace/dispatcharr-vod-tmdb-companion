@@ -205,7 +205,7 @@ def get_review_counts():
         if outcome == "resolved":
             continue
 
-        if outcome in ("review", "no_result"):
+        if outcome in ("review", "no_result", "conflicts"):
             if kind in counts:
                 counts[kind][outcome] = counts[kind].get(outcome, 0) + 1
         elif outcome == "auto":
@@ -213,11 +213,6 @@ def get_review_counts():
                 series_auto_count += 1
             elif kind == "movie":
                 movies_auto_count += 1
-
-    # Detect conflicts by checking for duplicate tmdb_ids
-    # (only needed if conflicts are shown; for now, assume rare)
-    counts["series"]["conflicts"] = 0
-    counts["movie"]["conflicts"] = 0
 
     return counts
 
