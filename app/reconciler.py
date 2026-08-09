@@ -323,6 +323,29 @@ def _search_tmdb(kind, title, year, api_key):
         return []
 
 
+def _search_tmdb_with_fallback(kind, title, year, api_key):
+    """Wraps _search_tmdb with a cross-endpoint retry: some providers
+    mis-tag movies as series (or vice versa) in Dispatcharr's VOD library,
+    so searching only the declared `kind`'s endpoint returns zero results
+    even though TMDB has the title under the other endpoint (confirmed
+    live: "A Dangerous Boy" is a movie on TMDB but stored as a Series row
+    here). If the primary search comes back empty, try the opposite
+    endpoint and tag every result with found_as so the review UI can flag
+    the mismatch instead of silently presenting it as a normal match."""
+    results = _search_tmdb(kind, title, year, api_key)
+    if results:
+        return results, kind
+
+    other_kind = "movie" if kind == "series" else "series"
+    fallback_results = _search_tmdb(other_kind, title, year, api_key)
+    if fallback_results:
+        for r in fallback_results:
+            r["found_as"] = other_kind
+        return fallback_results, other_kind
+
+    return [], kind
+
+
 def fuzzy_match_tmdb(rows, kind, api_key, auto_accept_threshold=AUTO_ACCEPT_DEFAULT,
                       progress_cb=None, worker_threads=DEFAULT_WORKER_THREADS,
                       row_done_cb=None, pause_check=None):
@@ -368,7 +391,7 @@ def fuzzy_match_tmdb(rows, kind, api_key, auto_accept_threshold=AUTO_ACCEPT_DEFA
         search_title, search_year = _clean_title_and_year(name, row.get("year"))
 
         time.sleep(TMDB_SEARCH_DELAY_SECS)
-        results = _search_tmdb(kind, search_title, search_year, api_key)
+        results, matched_kind = _search_tmdb_with_fallback(kind, search_title, search_year, api_key)
 
         with progress_lock:
             done_count += 1
@@ -389,6 +412,7 @@ def fuzzy_match_tmdb(rows, kind, api_key, auto_accept_threshold=AUTO_ACCEPT_DEFA
             "search_title": search_title,
             "best_match": best,
             "top_5": results[:5],
+            "matched_kind": matched_kind,
         }
         outcome = "auto" if best["confidence"] >= auto_accept_threshold else "review"
         if row_done_cb:

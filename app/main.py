@@ -198,11 +198,20 @@ def _page(body, nav_extra=""):
   </div>
 </div>
 {body}
+<button id="back-to-top" class="primary" type="button" onclick="window.scrollTo({{top: 0, behavior: 'smooth'}})"
+  style="display:none;position:fixed;bottom:1.5rem;right:1.5rem;width:3rem;height:3rem;border-radius:50%;
+  z-index:100;font-size:1.25rem;line-height:1;cursor:pointer;">&uarr;</button>
 <script>
 (function() {{
   const stored = localStorage.getItem('theme');
   if (stored) document.documentElement.setAttribute('data-theme', stored);
   updateToggleLabel();
+}})();
+(function() {{
+  const btn = document.getElementById('back-to-top');
+  window.addEventListener('scroll', function() {{
+    btn.style.display = window.scrollY > 400 ? 'block' : 'none';
+  }});
 }})();
 function toggleTheme() {{
   const current = document.documentElement.getAttribute('data-theme')
@@ -539,6 +548,14 @@ def _review_row_html(kind, entry, bucket):
             f'<div class="conflict-note">This title already exists as row id={entry.get("conflicting_row_id")} '
             f'in your library. Merging duplicate rows isn\'t supported yet (tracked separately) -- no action available here.</div>'
         )
+    matched_kind = entry.get("matched_kind")
+    mismatch_note = ""
+    if matched_kind and matched_kind != kind:
+        mismatch_note = (
+            f'<div class="conflict-note">No {kind} results on TMDB for this title -- these candidates were found '
+            f'by searching TMDB as a {matched_kind} instead. Your library likely has this title mis-tagged as {kind}; '
+            f'double-check before applying.</div>'
+        )
     single_match = bucket != "conflicts" and len(candidates) == 1
     prefill_id = candidates[0].get("tmdb_id") if single_match else ""
     manual_row = "" if bucket == "conflicts" else f"""
@@ -556,6 +573,7 @@ def _review_row_html(kind, entry, bucket):
         </div>
       </div>
       {_candidate_html(kind, row_id, candidates) if bucket != "conflicts" else ""}
+      {mismatch_note}
       {conflict_note}
       {manual_row}
     </div>"""
