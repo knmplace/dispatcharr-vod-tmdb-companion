@@ -502,12 +502,20 @@ def _candidate_html(kind, row_id, candidates):
     for i, cand in enumerate(candidates):
         poster = cand.get("poster_path")
         img_src = f"{_TMDB_POSTER_BASE}{poster}" if poster else ""
-        img_tag = f'<img src="{img_src}" alt="">' if img_src else '<div class="candidate-noimg" style="width:100%;aspect-ratio:2/3;background:var(--track);border-radius:6px;"></div>'
+        if img_src:
+            img_tag = f'<img src="{img_src}" alt="">'
+        else:
+            img_tag = (
+                '<div class="candidate-noimg" style="width:100%;aspect-ratio:2/3;'
+                'background:var(--track);border-radius:6px;display:flex;align-items:center;'
+                'justify-content:center;font-size:0.6rem;color:var(--muted);text-align:center;'
+                'padding:0.25rem;">no poster (scanned before poster support -- rerun to refresh)</div>'
+            )
         tiles.append(f"""<div class="candidate" data-tmdb-id="{cand.get('tmdb_id')}"
              onclick="selectCandidate(this, '{kind}', {row_id})">
           {img_tag}
           <div class="cand-title">{cand.get('name') or '?'} ({cand.get('year') or '?'})</div>
-          <div class="cand-conf">{cand.get('confidence', 0):.0f}% match</div>
+          <div class="cand-conf">{cand.get('confidence', 0):.0f}% match &middot; TMDB #{cand.get('tmdb_id')}</div>
         </div>""")
     return '<div class="candidates">' + "".join(tiles) + "</div>"
 
@@ -587,8 +595,11 @@ def review_page():
     body = f"""
 <div class="review-toolbar">
   <span id="selected-count">0 selected</span>
-  <input type="text" id="bulk-tmdb-id" placeholder="TMDB ID to apply to selected">
-  <button class="primary" onclick="applyBulk()">Apply to selected</button>
+  <button class="primary" onclick="applyPicked()">Apply picked posters/IDs</button>
+  <span class="hint" style="margin:0;">Uses whatever poster or TMDB ID you already selected/typed on each checked row.</span>
+  <span style="width:1px;align-self:stretch;background:var(--border,#333);"></span>
+  <input type="text" id="bulk-tmdb-id" placeholder="or: TMDB ID for ALL selected">
+  <button onclick="applyBulk()">Apply same ID to all selected</button>
   <span class="hint" style="margin:0;">{mode_note}</span>
 </div>
 {''.join(sections)}
@@ -635,6 +646,29 @@ async function applyBulk() {{
   if (!bulkId) {{ alert('Enter a TMDB ID to apply to the selected rows.'); return; }}
   const selections = collectSelections(bulkId);
   if (!selections.length) {{ alert('Check at least one row first.'); return; }}
+  await submitResolve(selections);
+}}
+
+async function applyPicked() {{
+  const checked = document.querySelectorAll('.row-check:checked');
+  if (!checked.length) {{ alert('Check at least one row first.'); return; }}
+  const selections = [];
+  const missing = [];
+  checked.forEach(cb => {{
+    const row = cb.closest('.review-row');
+    const manualInput = row.querySelector('.manual-id');
+    const [kind, id] = row.dataset.rowKey.split(':');
+    const tmdbId = manualInput ? manualInput.value.trim() : '';
+    if (tmdbId) {{
+      selections.push({{kind, id: parseInt(id, 10), tmdb_id: tmdbId}});
+    }} else {{
+      missing.push(row.querySelector('.review-row-title').textContent);
+    }}
+  }});
+  if (missing.length) {{
+    alert('These checked rows have no poster picked or ID typed yet, so they were skipped:\\n' + missing.join('\\n'));
+  }}
+  if (!selections.length) return;
   await submitResolve(selections);
 }}
 
