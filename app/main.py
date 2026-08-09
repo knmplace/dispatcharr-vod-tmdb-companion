@@ -44,6 +44,7 @@ logger = logging.getLogger("vod_tmdb_companion")
 app = FastAPI(title="VOD TMDB Reconciler Companion")
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
+_VERSION = "1.1.0"
 _BUILD_SHA = os.environ.get("BUILD_SHA", "unknown")[:7]
 
 
@@ -191,7 +192,7 @@ def _page(body, nav_extra=""):
 <div class="topbar">
   <div class="brand">
     <img src="/static/logo.jpg" alt="VOD TMDB Reconciler logo">
-    <h1>VOD TMDB Reconciler <span class="sub">Companion dashboard &middot; build {_BUILD_SHA}</span></h1>
+    <h1>VOD TMDB Reconciler <span class="sub">v{_VERSION} &middot; build {_BUILD_SHA}</span></h1>
   </div>
   <div class="row" style="margin-top:0;">
     {nav_extra}
