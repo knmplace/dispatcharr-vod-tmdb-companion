@@ -595,8 +595,8 @@ def review_page():
     body = f"""
 <div class="review-toolbar">
   <span id="selected-count">0 selected</span>
-  <button class="primary" onclick="applyPicked()">Apply picked posters/IDs</button>
-  <span class="hint" style="margin:0;">Uses whatever poster or TMDB ID you already selected/typed on each checked row.</span>
+  <button class="primary" onclick="applyPicked()">Apply chosen TMDB IDs</button>
+  <span class="hint" style="margin:0;">Uses whatever TMDB ID you already picked or typed on each checked row.</span>
   <span style="width:1px;align-self:stretch;background:var(--border,#333);"></span>
   <input type="text" id="bulk-tmdb-id" placeholder="or: TMDB ID for ALL selected">
   <button onclick="applyBulk()">Apply same ID to all selected</button>
