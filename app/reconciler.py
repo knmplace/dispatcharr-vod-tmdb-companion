@@ -41,7 +41,7 @@ _tmdb_session.mount(
     "https://", HTTPAdapter(pool_connections=64, pool_maxsize=64)
 )
 
-AUTO_ACCEPT_DEFAULT = 80  # mirrors bridge plugin's TMDB_DETECTION_CONFIDENCE_THRESHOLD
+AUTO_ACCEPT_DEFAULT = 75  # confidence threshold: >= 75% auto-accept, < 75% leave for review
 TMDB_SEARCH_DELAY_SECS = 0.25  # be polite to TMDB's rate limit, applied per-worker
 DEFAULT_WORKER_THREADS = 2  # user-tunable via 'worker_threads' setting -- each worker
 # sleeps TMDB_SEARCH_DELAY_SECS between its own calls, so N workers gives roughly
@@ -114,6 +114,41 @@ def clear_checkpoint():
     except FileNotFoundError:
         pass
     return "Checkpoint cleared -- next run will start a fresh full scan."
+
+
+def backfill_checkpoint_confidence(threshold=AUTO_ACCEPT_DEFAULT):
+    """Reclassify checkpoint entries based on new confidence threshold.
+    Entries with confidence >= threshold become 'auto', < threshold become 'review'.
+    Only affects entries with an 'entry' record containing a best_match confidence."""
+    checkpoint = _load_checkpoint()
+    if not checkpoint:
+        return "No checkpoint found."
+
+    changed = 0
+    for key, record in checkpoint.items():
+        entry = record.get("entry")
+        if not entry:
+            continue
+
+        best_match = entry.get("best_match", {})
+        confidence = best_match.get("confidence", 0)
+
+        if confidence >= threshold:
+            new_outcome = "auto"
+        else:
+            new_outcome = "review"
+
+        old_outcome = record.get("outcome")
+        if old_outcome != new_outcome and old_outcome not in ("resolved",):
+            record["outcome"] = new_outcome
+            changed += 1
+
+    _save_checkpoint(checkpoint)
+    global _checkpoint_cache, _checkpoint_mtime
+    _checkpoint_cache = checkpoint
+    _checkpoint_mtime = os.path.getmtime(_CHECKPOINT_PATH) if os.path.exists(_CHECKPOINT_PATH) else None
+
+    return f"Checkpoint backfill complete: {changed} entries reclassified to new {threshold}% threshold."
 
 
 # If a container restart kills the background scan thread mid-pass, nothing

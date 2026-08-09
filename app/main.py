@@ -24,6 +24,8 @@ from django_bootstrap import setup_django
 setup_django()
 
 from reconciler import (  # noqa: E402  (must import after django.setup())
+    AUTO_ACCEPT_DEFAULT,
+    backfill_checkpoint_confidence,
     clear_checkpoint,
     get_review_counts,
     get_run_status,
@@ -336,6 +338,10 @@ def dashboard():
 <div class="row">
   <form method="post" action="/run"><button type="submit" class="primary">Run reconcile pass</button></form>
   <form method="post" action="/pause"><button id="pause-btn" type="submit">Pause</button></form>
+  <form method="post" action="/backfill-checkpoint"
+        onsubmit="return confirm('Reclassify all checkpoint entries by {AUTO_ACCEPT_DEFAULT}% confidence threshold?');">
+    <button type="submit">Backfill checkpoint</button>
+  </form>
   <form method="post" action="/clear-checkpoint"
         onsubmit="return confirm('Clear checkpoint? The next run will do a full fresh scan instead of resuming.');">
     <button type="submit">Clear checkpoint</button>
@@ -502,6 +508,13 @@ def pause():
 @app.post("/clear-checkpoint")
 def clear_checkpoint_endpoint():
     clear_checkpoint()
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/backfill-checkpoint")
+def backfill_checkpoint_endpoint():
+    msg = backfill_checkpoint_confidence(AUTO_ACCEPT_DEFAULT)
+    logger.info(msg)
     return RedirectResponse("/", status_code=303)
 
 
