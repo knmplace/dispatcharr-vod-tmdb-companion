@@ -151,6 +151,60 @@ def backfill_checkpoint_confidence(threshold=AUTO_ACCEPT_DEFAULT):
     return f"Checkpoint backfill complete: {changed} entries reclassified to new {threshold}% threshold."
 
 
+def fix_conflicts_in_checkpoint():
+    """Re-detect conflicts in existing 'auto' entries and mark them as 'conflicts'.
+
+    During the initial scan, entries are marked 'auto' before conflict detection runs.
+    This function loads the checkpoint, re-detects conflicts, and updates their outcome.
+    Safe to run multiple times (idempotent)."""
+    from apps.vod.models import Series, Movie
+
+    checkpoint = _load_checkpoint()
+    if not checkpoint:
+        return "No checkpoint found."
+
+    # Gather all 'auto' entries by kind
+    auto_series = []
+    auto_movies = []
+    for key, record in checkpoint.items():
+        if record.get("outcome") != "auto":
+            continue
+        entry = record.get("entry")
+        if not entry:
+            continue
+        kind, row_id = key.split(":", 1)
+        if kind == "series":
+            auto_series.append(entry)
+        elif kind == "movie":
+            auto_movies.append(entry)
+
+    # Detect conflicts
+    _, series_conflicts = detect_conflicts(auto_series, "series")
+    _, movies_conflicts = detect_conflicts(auto_movies, "movie")
+
+    # Update checkpoint to mark conflicts
+    changed = 0
+    for entry in series_conflicts:
+        row_id = entry["id"]
+        key = f"series:{row_id}"
+        if key in checkpoint:
+            checkpoint[key]["outcome"] = "conflicts"
+            changed += 1
+    for entry in movies_conflicts:
+        row_id = entry["id"]
+        key = f"movie:{row_id}"
+        if key in checkpoint:
+            checkpoint[key]["outcome"] = "conflicts"
+            changed += 1
+
+    _save_checkpoint(checkpoint)
+    global _checkpoint_cache, _checkpoint_mtime
+    _checkpoint_cache = checkpoint
+    _checkpoint_mtime = os.path.getmtime(_CHECKPOINT_PATH) if os.path.exists(_CHECKPOINT_PATH) else None
+
+    return f"Conflict detection complete: {changed} entries reclassified as conflicts."
+
+
 # If a container restart kills the background scan thread mid-pass, nothing
 # ever gets a chance to write running=False -- the state file would say
 # "running" forever otherwise, permanently blocking Run Reconcile after every
@@ -1051,6 +1105,16 @@ def _do_run_reconcile_pass(settings, log):
 
     series_auto, series_conflicts = detect_conflicts(series_auto_raw, "series")
     movies_auto, movies_conflicts = detect_conflicts(movies_auto_raw, "movie")
+
+    # Update checkpoint to mark conflicts (they were stored as "auto" during the scan,
+    # but now that we've detected conflicts, they should be reclassified)
+    for entry in series_conflicts:
+        row_id = entry["id"]
+        checkpoint[f"series:{row_id}"]["outcome"] = "conflicts"
+    for entry in movies_conflicts:
+        row_id = entry["id"]
+        checkpoint[f"movie:{row_id}"]["outcome"] = "conflicts"
+    _save_checkpoint(checkpoint)
 
     for entry in series_auto:
         log.info(

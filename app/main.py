@@ -27,6 +27,7 @@ from reconciler import (  # noqa: E402  (must import after django.setup())
     AUTO_ACCEPT_DEFAULT,
     backfill_checkpoint_confidence,
     clear_checkpoint,
+    fix_conflicts_in_checkpoint,
     get_review_counts,
     get_run_status,
     list_review_items,
@@ -342,6 +343,10 @@ def dashboard():
         onsubmit="return confirm('Reclassify all checkpoint entries by {AUTO_ACCEPT_DEFAULT}% confidence threshold?');">
     <button type="submit">Backfill checkpoint</button>
   </form>
+  <form method="post" action="/fix-conflicts"
+        onsubmit="return confirm('Re-detect and mark duplicate-row conflicts in checkpoint? (Idempotent, safe to re-run)');">
+    <button type="submit">Fix conflicts</button>
+  </form>
   <form method="post" action="/clear-checkpoint"
         onsubmit="return confirm('Clear checkpoint? The next run will do a full fresh scan instead of resuming.');">
     <button type="submit">Clear checkpoint</button>
@@ -514,6 +519,13 @@ def clear_checkpoint_endpoint():
 @app.post("/backfill-checkpoint")
 def backfill_checkpoint_endpoint():
     msg = backfill_checkpoint_confidence(AUTO_ACCEPT_DEFAULT)
+    logger.info(msg)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/fix-conflicts")
+def fix_conflicts_endpoint():
+    msg = fix_conflicts_in_checkpoint()
     logger.info(msg)
     return RedirectResponse("/", status_code=303)
 
