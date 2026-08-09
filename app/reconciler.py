@@ -46,9 +46,11 @@ TMDB_SEARCH_DELAY_SECS = 0.25  # be polite to TMDB's rate limit, applied per-wor
 DEFAULT_WORKER_THREADS = 2  # user-tunable via 'worker_threads' setting -- each worker
 # sleeps TMDB_SEARCH_DELAY_SECS between its own calls, so N workers gives roughly
 # N / TMDB_SEARCH_DELAY_SECS requests/sec in aggregate. TMDB's v3 key limit is ~50
-# req/s, so this has a lot of headroom even at higher worker counts -- left as a
-# setting rather than a fixed value since the safe ceiling depends on the user's own
-# network/system and how many other things are sharing the TMDB key.
+# req/s -- that caps worker_threads at ~12 (12 / 0.25 = 48/s) before requests start
+# getting 429'd. Left as a setting rather than a fixed value so it can be tuned
+# down further if the key is shared with other tools, but going meaningfully
+# above ~12 risks throttling, not just faster scans.
+TMDB_MAX_SAFE_WORKER_THREADS = 12
 
 # File-based (not in-memory) run-state/pause-signal/checkpoint, same
 # rationale as the plugin this was ported from: any process restart or
@@ -260,46 +262,64 @@ def _clean_title_and_year(name, year):
     return cleaned, year or embedded_year
 
 
+TMDB_RATE_LIMIT_MAX_RETRIES = 3
+
+
 def _search_tmdb(kind, title, year, api_key):
     """Query TMDB /search/tv or /search/movie. Returns results sorted by
-    confidence, descending. `kind` is 'series' or 'movie'."""
+    confidence, descending. `kind` is 'series' or 'movie'.
+
+    A 429 (rate limited) is retried with backoff rather than treated as "no
+    results" -- without this, a throttled request would silently land the
+    row in the no_result bucket, indistinguishable from TMDB genuinely
+    having nothing for that title."""
     if not api_key:
         return []
 
     endpoint = "tv" if kind == "series" else "movie"
     year_param = "first_air_date_year" if kind == "series" else "primary_release_year"
 
-    try:
-        url = f"https://api.themoviedb.org/3/search/{endpoint}"
-        params = {
-            "api_key": api_key,
-            "query": title,
-            year_param: str(year) if year else None,
-        }
-        params = {k: v for k, v in params.items() if v}
+    url = f"https://api.themoviedb.org/3/search/{endpoint}"
+    params = {
+        "api_key": api_key,
+        "query": title,
+        year_param: str(year) if year else None,
+    }
+    params = {k: v for k, v in params.items() if v}
 
-        response = _tmdb_session.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+    for attempt in range(TMDB_RATE_LIMIT_MAX_RETRIES + 1):
+        try:
+            response = _tmdb_session.get(url, params=params, timeout=5)
+            if response.status_code == 429:
+                if attempt >= TMDB_RATE_LIMIT_MAX_RETRIES:
+                    logger.error(f"TMDB rate limit exceeded for '{title}' ({year}, {kind}) after {attempt} retries, giving up")
+                    return []
+                retry_after = float(response.headers.get("Retry-After", 1.0))
+                logger.warning(f"TMDB rate limited on '{title}' ({year}, {kind}), retrying in {retry_after}s")
+                time.sleep(retry_after)
+                continue
 
-        results = data.get("results", [])
-        scored = []
-        for result in results:
-            confidence = _calculate_tmdb_confidence(title, year, result)
-            result_title = result.get("name") if kind == "series" else result.get("title")
-            result_date = result.get("first_air_date") if kind == "series" else result.get("release_date")
-            scored.append({
-                "tmdb_id": result.get("id"),
-                "name": result_title,
-                "year": (result_date or "")[:4],
-                "confidence": confidence,
-                "poster_path": result.get("poster_path"),
-            })
+            response.raise_for_status()
+            data = response.json()
 
-        scored.sort(key=lambda x: x["confidence"], reverse=True)
-        return scored
-    except Exception as e:
-        logger.error(f"TMDB search error for '{title}' ({year}, {kind}): {e}")
+            results = data.get("results", [])
+            scored = []
+            for result in results:
+                confidence = _calculate_tmdb_confidence(title, year, result)
+                result_title = result.get("name") if kind == "series" else result.get("title")
+                result_date = result.get("first_air_date") if kind == "series" else result.get("release_date")
+                scored.append({
+                    "tmdb_id": result.get("id"),
+                    "name": result_title,
+                    "year": (result_date or "")[:4],
+                    "confidence": confidence,
+                    "poster_path": result.get("poster_path"),
+                })
+
+            scored.sort(key=lambda x: x["confidence"], reverse=True)
+            return scored
+        except Exception as e:
+            logger.error(f"TMDB search error for '{title}' ({year}, {kind}): {e}")
         return []
 
 
@@ -795,6 +815,30 @@ def _do_run_reconcile_pass(settings, log):
 
     _clear_pause_flag()
 
+    # save_row/progress fire once per completed row, from any worker thread.
+    # Writing the full checkpoint (and run-state) file to disk on every single
+    # row means the per-row cost grows with however many entries have
+    # accumulated so far -- fine for the first few hundred rows, but by
+    # 10-15k+ entries each rewrite gets slow enough to dominate wall-clock
+    # time regardless of worker_threads (confirmed live: throughput looked
+    # fine early in a pass, then flattened out well below what raw TMDB
+    # concurrency supports as the checkpoint grew). Batching the disk flush
+    # to roughly every CHECKPOINT_FLUSH_INTERVAL_SECS (or on pause/finish)
+    # keeps resume-after-crash safety without paying that cost per row.
+    CHECKPOINT_FLUSH_INTERVAL_SECS = 2.0
+    _last_flush = [0.0]
+    _dirty = [False]
+
+    def _flush_checkpoint(force=False):
+        now = time.time()
+        if not _dirty[0]:
+            return
+        if not force and (now - _last_flush[0]) < CHECKPOINT_FLUSH_INTERVAL_SECS:
+            return
+        _save_checkpoint(checkpoint)
+        _last_flush[0] = now
+        _dirty[0] = False
+
     def progress(kind, done, total):
         state = _load_run_state()
         state.setdefault("progress", {})[kind] = {"done": done, "total": total}
@@ -804,7 +848,8 @@ def _do_run_reconcile_pass(settings, log):
 
     def save_row(kind, row_id, outcome, entry):
         checkpoint[f"{kind}:{row_id}"] = {"outcome": outcome, "entry": entry}
-        _save_checkpoint(checkpoint)
+        _dirty[0] = True
+        _flush_checkpoint()
 
     state = _load_run_state()
     state["progress"] = {
@@ -817,12 +862,14 @@ def _do_run_reconcile_pass(settings, log):
         series_todo, "series", api_key, threshold, progress_cb=progress,
         worker_threads=worker_threads, row_done_cb=save_row, pause_check=_pause_requested
     )
+    _flush_checkpoint(force=True)
     paused_before_movies = _pause_requested()
     if not paused_before_movies:
         fuzzy_match_tmdb(
             movies_todo, "movie", api_key, threshold, progress_cb=progress,
             worker_threads=worker_threads, row_done_cb=save_row, pause_check=_pause_requested
         )
+        _flush_checkpoint(force=True)
     paused = _pause_requested()
 
     # Rebuild the full auto/review buckets from the checkpoint (not just this
