@@ -617,6 +617,40 @@ def list_review_items():
     }
 
 
+def list_review_items_paginated(kind, outcome, page=1, per_page=500):
+    """Paginated version of list_review_items for faster loading.
+
+    Args:
+        kind: 'series' or 'movie'
+        outcome: 'review', 'no_result', or 'conflicts'
+        page: 1-indexed page number
+        per_page: items per page (default 500)
+
+    Returns: {items: [...], total: int, pages: int, page: int, per_page: int}
+    """
+    all_items = list_review_items()
+
+    if kind not in ("series", "movie"):
+        return {"items": [], "total": 0, "pages": 0, "page": page, "per_page": per_page}
+
+    bucket = all_items.get(kind, {}).get(outcome, [])
+    total = len(bucket)
+    pages = (total + per_page - 1) // per_page if total else 1
+
+    # Clamp page to valid range
+    page = max(1, min(page, pages))
+    offset = (page - 1) * per_page
+    items = bucket[offset:offset + per_page]
+
+    return {
+        "items": items,
+        "total": total,
+        "pages": pages,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
 def resolve_review_items(selections, dry_run, log=None):
     """Writes a user-chosen tmdb_id for one or more review/no_result rows and
     marks them 'resolved' in the checkpoint so they drop off the review page.

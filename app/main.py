@@ -28,6 +28,7 @@ from reconciler import (  # noqa: E402  (must import after django.setup())
     get_review_counts,
     get_run_status,
     list_review_items,
+    list_review_items_paginated,
     pause_reconcile_pass,
     resolve_review_items,
     run_reconcile_pass,
@@ -587,27 +588,73 @@ _BUCKET_LABELS = {
 
 
 @app.get("/review", response_class=HTMLResponse)
-def review_page():
-    items = list_review_items()
+def review_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/review/series?outcome=review&page=1", status_code=302)
+
+
+def _render_review_section(kind, outcome, page, per_page=500):
+    """Render a single paginated review section."""
+    data = list_review_items_paginated(kind, outcome, page, per_page)
+    items = data["items"]
+    total = data["total"]
+    pages = data["pages"]
+    current_page = data["page"]
+
+    rows_html = [_review_row_html(kind, entry, outcome) for entry in items]
+
+    if not rows_html:
+        return f'<div class="card"><div class="empty-status">No {outcome.replace("_", " ")} items for {kind}s.</div></div>', 0
+
+    label, hint = _BUCKET_LABELS.get(outcome, (outcome, ""))
+
+    pagination_html = ""
+    if pages > 1:
+        page_links = []
+        for p in range(1, min(pages + 1, 8)):
+            if p == current_page:
+                page_links.append(f'<span style="font-weight:700;color:var(--fg);">{p}</span>')
+            else:
+                page_links.append(
+                    f'<a href="/review/{kind}?outcome={outcome}&page={p}" style="color:var(--accent);text-decoration:none;">{p}</a>'
+                )
+        if pages > 7:
+            page_links.append(f'<span style="color:var(--muted);">... <a href="/review/{kind}?outcome={outcome}&page={pages}" '
+                            f'style="color:var(--accent);text-decoration:none;">last ({pages})</a></span>')
+        pagination_html = f'<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border);text-align:center;font-size:0.9rem;">' \
+                         f'Page {current_page} of {pages} &middot; ' + ' '.join(page_links) + '</div>'
+
+    return f"""<div id="{outcome}" class="card">
+      <div class="card-title">{label} <span class="badge idle">{total}</span></div>
+      <div class="hint" style="margin:-0.5rem 0 1rem;">{hint}</div>
+      <div class="poster-grid">{''.join(rows_html)}</div>
+      {pagination_html}
+    </div>""", total
+
+
+@app.get("/review/{kind}", response_class=HTMLResponse)
+def review_page_paginated(kind: str, outcome: str = "review", page: int = 1):
+    if kind not in ("series", "movie"):
+        kind = "series"
+    if outcome not in ("review", "no_result", "conflicts"):
+        outcome = "review"
+
     settings = load_settings()
+    section_html, total = _render_review_section(kind, outcome, page, per_page=500)
 
-    sections = []
-    for bucket in ("review", "no_result", "conflicts"):
-        label, hint = _BUCKET_LABELS[bucket]
-        rows_html = []
-        for kind in ("series", "movie"):
-            for entry in items[kind][bucket]:
-                rows_html.append(_review_row_html(kind, entry, bucket))
-        if not rows_html:
-            continue
-        sections.append(f"""<div id="{bucket}" class="card">
-          <div class="card-title">{label} <span class="badge idle">{len(rows_html)}</span></div>
-          <div class="hint" style="margin:-0.5rem 0 1rem;">{hint}</div>
-          <div class="poster-grid">{''.join(rows_html)}</div>
-        </div>""")
-
-    if not sections:
-        sections.append('<div class="card"><div class="empty-status">Nothing needs manual attention right now.</div></div>')
+    # Tab navigation
+    tabs = []
+    for kind_name in ("series", "movie"):
+        for outcome_name in ("review", "no_result"):
+            counts = get_review_counts()
+            count = counts[kind_name][outcome_name]
+            is_active = kind_name == kind and outcome_name == outcome
+            active_style = "font-weight:700;color:var(--accent);border-bottom:3px solid var(--accent);" if is_active else ""
+            tabs.append(
+                f'<a href="/review/{kind_name}?outcome={outcome_name}&page=1" '
+                f'style="padding:0.6rem 1rem;text-decoration:none;color:var(--fg);{active_style}">'
+                f'{kind_name.title()} - {outcome_name.replace("_", " ").title()} ({count})</a>'
+            )
 
     mode_note = (
         "Selections will be written immediately (dry_run is OFF)."
@@ -616,6 +663,10 @@ def review_page():
     )
 
     body = f"""
+<div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1.5rem;overflow-x:auto;">
+  {''.join(tabs)}
+</div>
+
 <div class="review-toolbar">
   <span id="selected-count">0 selected</span>
   <button onclick="selectAllSingleMatches()">Select all single matches</button>
@@ -627,7 +678,8 @@ def review_page():
   <button onclick="applyBulk()">Apply same ID to all selected</button>
   <span class="hint" style="margin:0;">{mode_note}</span>
 </div>
-{''.join(sections)}
+
+{section_html}
 <div id="resolve-result"></div>
 
 <script>
