@@ -24,6 +24,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY app/ /companion/
 WORKDIR /companion
 
+ARG BUILD_SHA=unknown
+ENV BUILD_SHA=${BUILD_SHA}
 ENV DATA_DIR=/data
 ENV PYTHONPATH=/app:/companion:/dispatcharrpy/lib/python3.13/site-packages
 VOLUME ["/data"]
